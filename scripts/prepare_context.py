@@ -73,7 +73,7 @@ def prepare(source, output):
                             and p.suffix in {".py", ".json", ".yaml", ".yml", ".txt"})
     elif PROTOCOL == "pins":
         # These reviewed lazy imports are named through variables upstream.
-        runtime = closure(source, ["scripts/indexer-run.ts", "packages/protocol/profile.mjs",
+        runtime = closure(source, ["scripts/indexer-run.ts", "packages/inscriber/cli.ts", "packages/protocol/profile.mjs",
                                    "packages/protocol/reserve.mjs", "packages/collection/canonical.mjs"])
         fixtures = closure(source, [str(p.relative_to(source)) for p in (source / "packages/indexer").glob("*.test.ts")]) - runtime
         runtime.update({"LICENSE", "NOTICE"})
@@ -108,7 +108,8 @@ def prepare(source, output):
             original[folder + "/" + rel] = digest(target)
     if PROTOCOL == "pins":
         original_lock = json.loads((source / "package-lock.json").read_text())
-        todo, required = ["@qbit-oss/protocol"], {}
+        dependencies = ("@qbit-oss/protocol", "@qbit-oss/pqc")
+        todo, required = list(dependencies), {}
         while todo:
             name = todo.pop()
             if name in required:
@@ -120,7 +121,7 @@ def prepare(source, output):
             todo.extend(entry.get("dependencies", {}))
         package = {"name": "pins-indexer-runtime", "version": "1.0.0", "private": True,
                    "type": "module", "license": "Apache-2.0",
-                   "dependencies": {"@qbit-oss/protocol": required["@qbit-oss/protocol"]["version"]}}
+                   "dependencies": {name: required[name]["version"] for name in dependencies}}
         lock = {"name": package["name"], "version": package["version"], "lockfileVersion": 3,
                 "requires": True, "packages": {"": {k: package[k] for k in ("name", "version", "license", "dependencies")},
                 **{"node_modules/" + name: entry for name, entry in required.items()}}}

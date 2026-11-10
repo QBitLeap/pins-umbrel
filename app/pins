@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node --experimental-strip-types /opt/index-app/pins.mjs "$@"

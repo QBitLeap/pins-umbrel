@@ -27,6 +27,22 @@ default and minimum. The choice is saved in this browser, hidden pages stop
 refreshing, and requests never overlap. Paused indexing is shown explicitly;
 enabled indexing reports its current block and the selected node's block height.
 
+## Inscribe from the Umbrel terminal
+
+From the Umbrel host terminal, pass the working directory containing the
+collection and inscription files to the launcher installed by Qbit Core.
+
+```sh
+sudo sh /home/umbrel/umbrel/app-data/qbitleap-core-main/qbit-terminal.sh pins main /path/to/collection
+```
+
+For Testnet4, replace both network names with `testnet4`. Use `pins --help`
+and the [upstream inscriber guide](https://github.com/P2MR-PINS-Protocol/pins/tree/3e014f4ff156a35eea4b8613e37116fd124aa719/docs/inscriber).
+The terminal selects the network and supplies Core RPC for `preflight` and
+`broadcast`. Use upstream's `--confirm-network mainnet` or
+`--confirm-network testnet4` for those commands. Issuer keyfiles stay in
+your working directory.
+
 ## Source checks
 
 ```sh
