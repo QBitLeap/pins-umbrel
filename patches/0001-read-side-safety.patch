@@ -1,0 +1,319 @@
+diff --git a/packages/indexer/chain.ts b/packages/indexer/chain.ts
+--- a/packages/indexer/chain.ts
++++ b/packages/indexer/chain.ts
+@@ -12,7 +12,7 @@
+ export type RpcTransaction = {
+   txid: string;
+   hex: string;
+-  vin: { coinbase?: string; txid?: string; vout?: number; txinwitness?: string[] }[];
++  vin: { coinbase?: string; txid?: string; vout?: number; txinwitness?: string[]; prevout?: { scriptPubKey: { hex: string } } }[];
+   vout: { scriptPubKey: { hex: string } }[];
+ };
+ 
+@@ -87,17 +87,21 @@
+   return { inputs: vins, outputs: vouts };
+ }
+ 
+-function leafScript(witness: Uint8Array[]): Uint8Array | undefined {
++function leafScript(witness: Uint8Array[], spentScript: string): Uint8Array | undefined {
++  if (!/^5220[0-9a-f]{64}$/.test(spentScript)) return undefined;
+   if (witness.length < 2) return undefined;
+   const end = witness[witness.length - 1]?.[0] === 0x50 ? witness.length - 1 : witness.length;
+-  return end >= 2 ? witness[end - 2] : undefined;
++  const control = witness[end - 1];
++  if (end < 2 || !control || control.length < 1 || (control.length - 1) % 32 !== 0 || (control[0] & 0xfe) !== 0xc0) return undefined;
++  return witness[end - 2];
+ }
+ 
+ /**
+  * `lookup` returns an output value this indexer has already stored.
+  * Outputs created earlier in the same block are visible to later transactions.
+  */
+-export function toChainBlock(block: RpcBlock, lookup: (txid: string, vout: number) => bigint | undefined): ChainBlock {
++export function toChainBlock(block: RpcBlock, lookup: (txid: string, vout: number) => bigint | undefined, subsidy?: bigint): ChainBlock {
++  if (subsidy === undefined || subsidy < 0n) throw new Error("Actual block subsidy from Core is required");
+   const seen = new Map<string, bigint>();
+   const txs: ChainTx[] = [];
+   for (const tx of block.tx) {
+@@ -108,7 +112,10 @@
+       const value = seen.get(key) ?? lookup(input.prevTxid ?? "", input.prevVout ?? -1);
+       if (value === undefined) throw new Error(`output ${key} has no stored value`);
+       const witness = input.witness.length > 0 ? input.witness : (tx.vin[index]?.txinwitness ?? []).map((item) => hexToBytes(item));
+-      return { prevTxid: input.prevTxid, prevVout: input.prevVout, value, leafScript: leafScript(witness) };
++      const script = tx.vin[index]?.prevout?.scriptPubKey.hex;
++      if (!script) throw new Error("Missing spent-output script; refusing incomplete chain data");
++      if (/^5220[0-9a-f]{64}$/.test(script) && witness.length < 2) throw new Error("Missing P2MR witness; refusing pruned history");
++      return { prevTxid: input.prevTxid, prevVout: input.prevVout, value, leafScript: leafScript(witness, script) };
+     });
+     parsed.outputs.forEach((output, vout) => seen.set(`${tx.txid}:${vout}`, output.value));
+     txs.push({
+@@ -117,17 +124,10 @@
+       outputs: parsed.outputs.map((output) => ({ value: output.value, script: output.script })),
+     });
+   }
+-  let fees = 0n;
+-  for (const tx of txs.slice(1)) {
+-    const inputTotal = tx.inputs.reduce((sum, input) => sum + input.value, 0n);
+-    const outputTotal = tx.outputs.reduce((sum, output) => sum + output.value, 0n);
+-    if (inputTotal > outputTotal) fees += inputTotal - outputTotal;
+-  }
+-  const claimed = txs[0]?.outputs.reduce((sum, output) => sum + output.value, 0n) ?? 0n;
+   return {
+     hash: block.hash,
+     height: block.height,
+-    subsidy: claimed > fees ? claimed - fees : 0n,
++    subsidy,
+     txs,
+   };
+ }
+diff --git a/packages/indexer/follow.test.ts b/packages/indexer/follow.test.ts
+--- a/packages/indexer/follow.test.ts
++++ b/packages/indexer/follow.test.ts
+@@ -17,6 +17,7 @@
+   return {
+     call: async <T>(method: string): Promise<T> => {
+       if (method === "getblockchaininfo") return { chain, blocks: 0, bestblockhash: "aa" } as T;
++      if (method === "getblockstats") return { subsidy: 50 } as T;
+       if (method === "getblockcount") return 0 as T;
+       throw new Error(method);
+     },
+@@ -79,6 +80,7 @@
+   const rpc: Rpc = {
+     call: async <T>(method: string): Promise<T> => {
+       if (method === "getblockchaininfo") return { chain: "regtest", blocks: 0, bestblockhash: tip } as T;
++      if (method === "getblockstats") return { subsidy: 50 } as T;
+       if (method === "getblockcount") return 0 as T;
+       if (method === "getbestblockhash" || method === "getblockhash") return tip as T;
+       if (method === "getblock") {
+@@ -116,6 +118,7 @@
+   const rpc: Rpc = {
+     call: async <T>(method: string, params?: unknown[]): Promise<T> => {
+       if (method === "getblockchaininfo") return { chain: "regtest", blocks: height, bestblockhash: hashes[height] } as T;
++      if (method === "getblockstats") return { subsidy: 50 } as T;
+       if (method === "getblockcount") return height as T;
+       if (method === "getbestblockhash") return hashes[height] as T;
+       if (method === "getblockhash") return hashes[Number(params?.[0])] as T;
+@@ -168,12 +171,12 @@
+     buildEnvelope([contentTypeField("text/plain"), pointerField(10_000n)], Uint8Array.of(2)),
+   ]);
+   const funding = coinbaseTx(1, 20_000n, scriptA);
+-  const fanout = payTx(funding.txid, 0, [{ value: 20_000n, script: scriptA }]);
++  const fanout = payTx(funding.txid, 0, [{ value: 20_000n, script: scriptA }], [Uint8Array.of(1), Uint8Array.of(0x51), Uint8Array.of(0xc0)]);
+   const reveal = payTx(fanout.txid, 0, [
+     { value: 10_000n, script: scriptA },
+     { value: 10_000n, script: scriptA },
+   ], [Uint8Array.of(1), leaf, Uint8Array.of(0xc1)]);
+-  const transfer = payTx(reveal.txid, 0, [{ value: 10_000n, script: scriptB }]);
++  const transfer = payTx(reveal.txid, 0, [{ value: 10_000n, script: scriptB }], [Uint8Array.of(1), Uint8Array.of(0x51), Uint8Array.of(0xc0)]);
+   const chain: RpcBlock[] = [
+     rpcBlock("11".repeat(32), 161946, [funding]),
+     rpcBlock("22".repeat(32), 161947, [coinbaseTx(2, 50n, scriptA), fanout]),
+@@ -235,6 +238,7 @@
+   return {
+     call: async <T>(method: string, params?: unknown[]): Promise<T> => {
+       if (method === "getblockchaininfo") return { chain: "regtest", blocks: tip.height, bestblockhash: tip.hash } as T;
++      if (method === "getblockstats") return { subsidy: 50 } as T;
+       if (method === "getblockcount") return tip.height as T;
+       if (method === "getbestblockhash") return tip.hash as T;
+       if (method === "getblockhash") {
+diff --git a/packages/indexer/follow.ts b/packages/indexer/follow.ts
+--- a/packages/indexer/follow.ts
++++ b/packages/indexer/follow.ts
+@@ -5,10 +5,7 @@
+  * A reorg is detected when the stored hash at a height is not the node's hash.
+  * The indexer disconnects back to the fork and applies the new blocks.
+  */
+-import { spawnSync } from "node:child_process";
+-import { mkdtempSync, writeFileSync } from "node:fs";
+-import { tmpdir } from "node:os";
+-import { join } from "node:path";
++import { request as httpRequest, Agent } from "node:http";
+ import { hexToBytes } from "@qbit-oss/protocol";
+ import { parseTransaction, toChainBlock, type RpcBlock } from "./chain.ts";
+ import { rpcChainName, type FollowNetwork } from "./chains.ts";
+@@ -21,17 +18,30 @@
+ type ChainInfo = { chain: string; blocks: number; bestblockhash: string };
+ 
+ export async function rpcCall(url: string, user: string, password: string, method: string, params: unknown[] = []): Promise<unknown> {
+-  const file = join(mkdtempSync(join(tmpdir(), "pins-rpc-")), "body.json");
+-  writeFileSync(file, JSON.stringify({ jsonrpc: "1.0", id: "indexer", method, params }));
+-  const run = spawnSync("curl", ["-sS", "-m", "180", "-u", `${user}:${password}`, "-H", "content-type: application/json", "--data-binary", `@${file}`, url], {
+-    encoding: "utf8",
+-    maxBuffer: 64 * 1024 * 1024,
++  const target = new URL(url);
++  if (target.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(target.hostname)) throw new Error("Private loopback RPC required");
++  const data = JSON.stringify({ jsonrpc: "1.0", id: "indexer", method, params });
++  return await new Promise((resolve, reject) => {
++    const req = httpRequest(target, { method: "POST", auth: `${user}:${password}`, agent: rpcAgent,
++      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, (res) => {
++      const chunks: Buffer[] = []; let size = 0;
++      res.on("data", (chunk: Buffer) => { size += chunk.length; if (size > 32 * 1024 * 1024) req.destroy(new Error("RPC response too large")); else chunks.push(chunk); });
++      res.on("error", reject);
++      res.on("end", () => {
++        try {
++          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { result: unknown; error: { message: string } | null };
++          if (body.error) throw new Error(`${method} failed: ${body.error.message}`);
++          if (res.statusCode !== 200) throw new Error(`${method} unavailable`);
++          resolve(body.result);
++        } catch (error) { reject(error); }
++      });
++    });
++    req.setTimeout(60_000, () => req.destroy(new Error("RPC read timeout")));
++    req.on("error", reject); req.end(data);
+   });
+-  if (run.status !== 0 || !run.stdout) throw new Error(`${method} failed: ${run.stderr || run.stdout || "no response"}`);
+-  const body = JSON.parse(run.stdout) as { result: unknown; error: { message: string } | null };
+-  if (body.error) throw new Error(`${method} failed: ${body.error.message}`);
+-  return body.result;
+ }
++
++const rpcAgent = new Agent({ keepAlive: true, maxSockets: 2 });
+ 
+ export function httpRpc(url: string, user: string, password: string): Rpc {
+   return { call: (method, params) => rpcCall(url, user, password, method, params) as Promise<never> };
+@@ -73,17 +83,20 @@
+     const block = await rpc.call<RpcBlock>("getblock", [hash, 3]);
+     for (const tx of block.tx) {
+       const parsed = parseTransaction(hexToBytes(tx.hex));
+-      for (const input of parsed.inputs) {
++      for (const [inputIndex, input] of parsed.inputs.entries()) {
+         if (input.coinbase || !input.prevTxid || input.prevVout === undefined) continue;
+-        if (store.outputValue(input.prevTxid, input.prevVout) !== undefined) continue;
++        if (store.outputValue(input.prevTxid, input.prevVout) !== undefined && tx.vin[inputIndex]?.prevout?.scriptPubKey?.hex) continue;
+         const prev = await rpc.call<{ hex: string }>("getrawtransaction", [input.prevTxid, true]);
+         const parent = parseTransaction(hexToBytes(prev.hex));
+         const output = parent.outputs[input.prevVout];
+         if (!output) throw new Error(`output ${input.prevTxid}:${input.prevVout} is missing`);
++        tx.vin[inputIndex].prevout = { scriptPubKey: { hex: Buffer.from(output.script).toString("hex") } };
+         store.saveOutput(input.prevTxid, input.prevVout, output.value);
+       }
+     }
+-    const chainBlock = toChainBlock(block, (txid, vout) => store.outputValue(txid, vout));
++    const stats = await rpc.call<{ subsidy: number }>("getblockstats", [hash, ["subsidy"]]);
++    if (!Number.isSafeInteger(stats.subsidy) || stats.subsidy < 0) throw new Error("Invalid Core subsidy");
++    const chainBlock = toChainBlock(block, (txid, vout) => store.outputValue(txid, vout), BigInt(stats.subsidy));
+     store.commit(chainBlock);
+   }
+   const tip = store.tip();
+diff --git a/packages/indexer/store.ts b/packages/indexer/store.ts
+--- a/packages/indexer/store.ts
++++ b/packages/indexer/store.ts
+@@ -118,9 +118,14 @@
+     if (!ready) {
+       this.db.exec(SCHEMA);
+       this.setMeta("schema", "1");
++      this.setMeta("network", this.indexer.network);
+     } else if (this.meta("schema") !== "1") {
+       throw new Error(`unknown indexer schema ${this.meta("schema")}`);
+     }
++    if (this.meta("network") !== this.indexer.network) throw new Error("Index network binding differs; never reuse this database across networks");
++    // Read APIs must not scan every payload for each candidate input.
++    this.db.exec("CREATE INDEX IF NOT EXISTS pins_inscription_order ON inscriptions(number DESC)");
++    this.db.exec("CREATE INDEX IF NOT EXISTS pins_carrier_lookup ON inscriptions(json_extract(payload,'$.location.txid'),json_extract(payload,'$.location.vout')) WHERE json_extract(payload,'$.location.state')='located'");
+     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+     this.indexer.adopt(this.readInscriptions());
+     this.indexer.installUndo(this.readUndo());
+@@ -170,9 +175,13 @@
+         digest,
+       );
+       this.db.prepare("INSERT INTO undo (height, payload) VALUES (?, ?)").run(block.height, JSON.stringify(freezeUndo(undo)));
+-      const output = this.db.prepare("INSERT INTO outputs (txid, vout, value, height) VALUES (?, ?, ?, ?)");
++      // Input hydration may cache an earlier output in this same block before
++      // commit. Promote only a matching placeholder; never replace chain data.
++      const output = this.db.prepare("INSERT INTO outputs (txid, vout, value, height) VALUES (?, ?, ?, ?) ON CONFLICT(txid,vout) DO UPDATE SET height=excluded.height WHERE outputs.height=-1 AND outputs.value=excluded.value");
+       for (const tx of block.txs) {
+-        tx.outputs.forEach((entry, vout) => output.run(tx.txid, vout, entry.value.toString(), block.height));
++        tx.outputs.forEach((entry, vout) => {
++          if (output.run(tx.txid, vout, entry.value.toString(), block.height).changes !== 1) throw new Error("Output cache conflicts with the block");
++        });
+       }
+       const changed = new Set([...undo.created, ...undo.prior.map((row) => row.id)]);
+       this.writeInscriptions(changed);
+diff --git a/packages/inscriber/script.ts b/packages/inscriber/script.ts
+--- a/packages/inscriber/script.ts
++++ b/packages/inscriber/script.ts
+@@ -87,8 +87,9 @@
+   const parts: Uint8Array[] = [Uint8Array.of(OP_FALSE, OP_IF), pushBytes(marker, minimal)];
+   for (const field of fields) {
+     if (field.tag < 1 || field.tag > 255) throw new Error("field tag must be one byte");
+-    parts.push(pushBytes(Uint8Array.of(field.tag), minimal));
+-    for (const piece of chunks(field.value)) parts.push(pushBytes(piece, minimal));
++    for (const piece of chunks(field.value)) {
++      parts.push(pushBytes(Uint8Array.of(field.tag), minimal), pushBytes(piece, minimal));
++    }
+   }
+   parts.push(pushBytes(new Uint8Array(), minimal));
+   for (const piece of chunks(body)) parts.push(pushBytes(piece, minimal));
+@@ -201,7 +202,7 @@
+ 
+ function readFields(pushes: Uint8Array[]): ParsedEnvelope {
+   const flags: string[] = [];
+-  let separator = pushes.findIndex((push) => push.length === 0);
++  let separator = pushes.findIndex((push, index) => index % 2 === 0 && push.length === 0);
+   if (separator < 0) {
+     flags.push("no_body");
+     separator = pushes.length;
+@@ -216,7 +217,10 @@
+   for (let i = 0; i < head.length; i += 2) {
+     const tagBytes = head[i];
+     const value = head[i + 1];
+-    if (tagBytes.length !== 1) continue;
++    if (tagBytes.length !== 1) {
++      if (tagBytes.length && tagBytes[0] % 2 === 0) flags.push("opaque");
++      continue;
++    }
+     const tag = tagBytes[0];
+     if (tag % 2 === 0 && ![2].includes(tag)) flags.push("opaque");
+     if (seen.has(tag) && tag !== 5) flags.push("duplicate_field");
+diff --git a/packages/indexer/read-safety.test.ts b/packages/indexer/read-safety.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/indexer/read-safety.test.ts
+@@ -0,0 +1,47 @@
++// Local read-only indexer acceptance; synthetic bytes, no keys/RPC/signatures.
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { mkdtempSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { Store } from './store.ts';
++import { toChainBlock } from './chain.ts';
++import { buildEnvelope, parseEnvelopes, pointerField, metadataField, concatBytes, pushBytes, MARKER } from '../inscriber/script.ts';
++
++const TX='11'.repeat(32);
++test('metadata chunks and an empty zero pointer preserve exact bytes',()=>{
++ const metadata=new Uint8Array(1100).fill(42),body=new Uint8Array([1,2]);
++ const parsed=parseEnvelopes(buildEnvelope([pointerField(0n),metadataField(metadata)],body))[0];
++ assert.deepEqual(parsed.body,body);assert.deepEqual(parsed.fields.find(f=>f.tag===5)?.value,metadata);
++ assert.equal(parsed.fields.find(f=>f.tag===2)?.value.length,0);assert.deepEqual(parsed.flags,[]);
++});
++test('unknown multibyte even tags make content opaque',()=>{
++ const leaf=concatBytes([new Uint8Array([0,0x63]),pushBytes(MARKER),pushBytes(new Uint8Array([0x80,1])),pushBytes(new Uint8Array([1])),new Uint8Array([0,0x68])]);
++ assert.ok(parseEnvelopes(leaf)[0].flags.includes('opaque'));
++});
++test('same-block hydration promotes only equal cached output values and reorg works',()=>{
++ const dir=mkdtempSync(join(tmpdir(),'pins-read-'));const path=join(dir,'index.sqlite');const store=new Store(path,{network:'testnet4'});
++ const block={height:0,hash:'aa'.repeat(32),subsidy:50n,txs:[{txid:TX,inputs:[{coinbase:true,value:0n}],outputs:[{value:50n,script:new Uint8Array([0x51])}]}]};
++ try {
++  store.saveOutput(TX,0,50n);store.commit(block);assert.equal(store.tip()?.height,0);store.disconnect();assert.equal(store.tip(),null);
++  store.saveOutput(TX,0,49n);assert.throws(()=>store.commit(block),/conflicts/);assert.equal(store.tip(),null);assert.equal(store.indexer.lastUndo(),undefined);
++ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
++});
++test('a database cannot be reopened on another network',()=>{
++ const dir=mkdtempSync(join(tmpdir(),'pins-read-'));const path=join(dir,'index.sqlite');
++ try{new Store(path,{network:'testnet4'}).close();assert.throws(()=>new Store(path,{network:'mainnet'}),/network binding/);}finally{rmSync(dir,{recursive:true,force:true});}
++});
++function raw(coinbase:boolean,value:bigint){
++ const val=Buffer.alloc(8);val.writeBigUInt64LE(value);
++ return Buffer.concat([Buffer.from('0100000001','hex'),coinbase?Buffer.alloc(32):Buffer.from(TX,'hex'),Buffer.from(coinbase?'ffffffff':'00000000','hex'),Buffer.from('00ffffffff01','hex'),val,Buffer.from('015100000000','hex')]).toString('hex');
++}
++test('actual subsidy survives an underclaimed coinbase; spent type and leaf version constrain envelopes',()=>{
++ const envelope=buildEnvelope([],new Uint8Array([9]));
++ const spend={txid:'22'.repeat(32),hex:raw(false,40n),vin:[{prevout:{scriptPubKey:{hex:'5220'+'33'.repeat(32)}},txinwitness:['01',Buffer.from(envelope).toString('hex'),'c0']}],vout:[{scriptPubKey:{hex:'51'}}]};
++ const block={hash:'aa'.repeat(32),height:1,tx:[{txid:TX,hex:raw(true,45n),vin:[{coinbase:'00'}],vout:[{scriptPubKey:{hex:'51'}}]},spend]};
++ assert.throws(()=>toChainBlock(block,()=>50n),/subsidy/);
++ const valid=toChainBlock(block,()=>50n,50n);assert.equal(valid.subsidy,50n);assert.deepEqual(valid.txs[1].inputs[0].leafScript,envelope);
++ spend.vin[0].txinwitness[2]='c2';assert.equal(toChainBlock(block,()=>50n,50n).txs[1].inputs[0].leafScript,undefined);
++ spend.vin[0].prevout.scriptPubKey.hex='51';spend.vin[0].txinwitness[2]='c0';assert.equal(toChainBlock(block,()=>50n,50n).txs[1].inputs[0].leafScript,undefined);
++ spend.vin[0].prevout.scriptPubKey.hex='5220'+'33'.repeat(32);spend.vin[0].txinwitness=[];assert.throws(()=>toChainBlock(block,()=>50n,50n),/Missing P2MR witness/);
++});

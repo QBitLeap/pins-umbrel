@@ -1,0 +1,12 @@
+{
+  "format": "reviewed-upstream-source-v1",
+  "repository": "https://github.com/P2MR-PINS-Protocol/pins.git",
+  "commit": "3e014f4ff156a35eea4b8613e37116fd124aa719",
+  "patches": [
+    {
+      "file": "patches/0001-read-side-safety.patch",
+      "sha256": "6d94732311023e62c7d79e739e26ce43371c302b3668de81337db4779e9ae75d"
+    }
+  ],
+  "policy": "Pinned upstream plus disclosed read-side corrections; no unattended upstream replacement"
+}

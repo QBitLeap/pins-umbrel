@@ -1,0 +1,10 @@
+Standalone Umbrel wrapper
+Copyright 2026 LEAP contributors
+
+Wrapper code: MIT; see LICENSE.
+
+PINS source and icon are governed by the upstream Apache-2.0 license and notices under assets/upstream. The pinned source and explicit read-side patch are recorded in upstream.lock.json. The patch changes RPC transport, exact read-side chain decoding, network binding and cache/index safety; it does not add wallet access.
+
+Container base images and language/runtime dependencies retain their upstream licenses.
+
+The patch under patches/ is distributed under the PINS Apache-2.0 terms; see patches/LICENSE.txt and the retained PINS notice.

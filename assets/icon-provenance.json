@@ -1,0 +1,20 @@
+{
+  "format": "umbrel-icon-provenance-v1",
+  "icon": "icon.svg",
+  "sourceKind": "reviewed upstream SVG",
+  "upstreamRepository": "https://github.com/P2MR-PINS-Protocol/pins",
+  "upstreamRevision": "3e014f4ff156a35eea4b8613e37116fd124aa719",
+  "upstreamAsset": "docs/assets/pins-avatar.svg",
+  "sourceSha256": "45c443b8ca258c26a53d8b70645bfb6c22b753402f6c7560d410180055ae76e7",
+  "iconSha256": "2e94a26df567e6bbf489f857dedbe9a1bf85205b794312b73b95e87eadffec06",
+  "svgType": "native vector",
+  "vectorArtwork": true,
+  "viewport": [
+    512,
+    512
+  ],
+  "geometryUnchanged": true,
+  "adaptation": "Root viewport normalized; accessible title added; shapes/styles unchanged",
+  "licenseAndNotices": "assets/upstream/",
+  "inlineAdaptationNotice": true
+}
