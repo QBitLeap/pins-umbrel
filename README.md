@@ -1,5 +1,9 @@
 # PINS for Umbrel
 
+| macOS | Windows | Linux | Umbrel |
+| --- | --- | --- | --- |
+| [<img alt="PINS for macOS" src="https://raw.githubusercontent.com/QBitLeap/umbrel-app-store/f02d8c427c868dd1fbbf06bc70b1cea238bca807/assets/platform-icons/pins/macos.png" width="72">](https://github.com/QBitLeap/pins-umbrel/releases/latest#macos) | [<img alt="PINS for Windows" src="https://raw.githubusercontent.com/QBitLeap/umbrel-app-store/f02d8c427c868dd1fbbf06bc70b1cea238bca807/assets/platform-icons/pins/windows.png" width="72">](https://github.com/QBitLeap/pins-umbrel/releases/latest#windows) | [<img alt="PINS for Linux" src="https://raw.githubusercontent.com/QBitLeap/umbrel-app-store/f02d8c427c868dd1fbbf06bc70b1cea238bca807/assets/platform-icons/pins/linux.png" width="72">](https://github.com/QBitLeap/pins-umbrel/releases/latest#linux) | [<img alt="PINS for Umbrel" src="https://raw.githubusercontent.com/QBitLeap/umbrel-app-store/f02d8c427c868dd1fbbf06bc70b1cea238bca807/assets/platform-icons/pins/umbrel.png" width="72">](https://github.com/QBitLeap/umbrel-app-store) |
+
 Independent PINS app source for umbrelOS 2.0 or newer. This is an amd64
 prerelease. Published images have passed isolated Mainnet/Testnet4 integration;
 managed Umbrel installation and real-chain operation acceptance remain pending.
@@ -13,6 +17,8 @@ outside the read API. App credentials are derived per installation and are
 never included in source or container images.
 
 ## Installation
+
+Desktop downloads include the PINS inscriber, indexer and Node runtime. Extract the archive. Run `./pins` or `./pins-indexer` in a shell, or `.\pins.cmd` or `.\pins-indexer.cmd` in PowerShell. Use the included inscriber guide for the command sequence. Collection ZIP support uses `unzip` on macOS and Linux and `tar.exe` on Windows.
 
 Install a published release through the QBitLeap community app store:
 https://github.com/QBitLeap/umbrel-app-store

@@ -1,0 +1,42 @@
+name: Desktop packages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, target: macos-arm64}
+          - {runner: macos-15-intel, target: macos-x64}
+          - {runner: windows-2025, target: windows-x64}
+          - {runner: ubuntu-24.04, target: linux-x64}
+          - {runner: ubuntu-24.04-arm, target: linux-arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: QBitLeap/umbrel-app-store
+          ref: f02d8c427c868dd1fbbf06bc70b1cea238bca807
+          path: .platform-art
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.23.4'
+          package-manager-cache: false
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/package_desktop.py --assets .platform-art/assets --output .desktop
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pins-${{ matrix.target }}
+          path: .desktop/*
+          include-hidden-files: true
+          if-no-files-found: error
