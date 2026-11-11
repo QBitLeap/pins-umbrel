@@ -31,6 +31,7 @@ def copy(source, target):
 
 
 def closure(source, entries):
+    source = source.resolve()
     todo, seen = list(entries), set()
     while todo:
         rel = todo.pop()
@@ -42,9 +43,9 @@ def closure(source, entries):
             if not name.startswith("."):
                 continue
             target = ((source / rel).parent / name).resolve()
-            if not target.is_relative_to(source.resolve()) or not target.is_file():
+            if not target.is_relative_to(source) or not target.is_file():
                 raise ValueError("Unresolved source import")
-            todo.append(str(target.relative_to(source)))
+            todo.append(target.relative_to(source).as_posix())
     return seen
 
 
